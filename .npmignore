@@ -1,0 +1,10 @@
+# babel
+babel.config.js
+
+# eslint
+.eslintrc.js
+.eslintrc
+.eslintignore
+
+# test
+jest.config.js
