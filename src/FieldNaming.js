@@ -15,7 +15,7 @@ class FieldNaming {
         if (this.options.exclude.indexOf(str) !== -1) {
             return str;
         }
-        const results = await this.wordFinder.trySplit(str);
+        const results = await this.wordFinder.trySplit(str.replace(/_/g, ''));
         if (results.length > 0) {
             // if (results.length > 1 && results[results.length - 1] === 'id') {
             //     results.pop();
