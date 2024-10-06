@@ -9,6 +9,14 @@
     "test": "jest",
     "build": "rollup -c rollup.config.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/themost-framework/schemer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/themost-framework/schemer/issues"
+  },
+  "homepage": "https://github.com/themost-framework/schemer#readme",
   "license": "BSD-3-Clause",
   "devDependencies": {
     "@babel/core": "^7.25.7",
