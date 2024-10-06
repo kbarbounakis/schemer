@@ -12,14 +12,17 @@ describe('WordFinder', () => {
         expect(found).toBeFalsy();
     });
 
-    fit('should split words', async () => {
-        let word = 'calendartype';
+    it('should split words #1', async () => {
         const wordFinder = new WordFinder();
-        let results = await wordFinder.trySplit(word);
+        const results = await wordFinder.trySplit('calendartype');
         expect(results).toEqual([
             'calendar', 'type'
         ]);
-        results = await wordFinder.trySplit('isaccessibleforfree');
+    });
+
+    it('should split words #2', async () => {
+        const wordFinder = new WordFinder();
+        const results = await wordFinder.trySplit('isAccessibleforfree');
         expect(results).toEqual([
             'is', 'accessible', 'for', 'free'
         ]);

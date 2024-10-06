@@ -38,14 +38,17 @@ class WordFinder {
         let continueProcessing = true;
         while(continueProcessing) {
             let args = [];
-            let index = 0;
+            let index = 1;
             while (index < word.length) {
-                args.push(word.substring(0, index + 1));
+                args.push(word.substring(0, index + 1).toLowerCase());
                 index++;
             }
             let argIndex = 0;
+            let findWords = await this.db.executeAsync(
+                new QueryExpression().select(new QueryField('word')).from('WordBase').where('word').equal(args)
+            );
             for (const arg of args.reverse()) {
-                let findWord = await this.find(arg);
+                let findWord = findWords.find((item) => item.word === arg);
                 if (findWord) {
                     const re = new RegExp(`^${arg}`, 'i');
                     word = word.replace(re, '');

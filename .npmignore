@@ -7,4 +7,14 @@ babel.config.js
 .eslintignore
 
 # test
+spec
 jest.config.js
+jest.setup.js
+
+# gitpod
+.gitpod.yml
+
+# rollup
+rollup.config.js
+
+
