@@ -2,12 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { URL } from 'url';
 import { promisify } from 'util';
-import { XDocument } from '@themost/xml';
+import { XDocument, XNode } from '@themost/xml';
+import { SyncSeriesEventEmitter } from '@themost/events';
 const readFileAsync = promisify(fs.readFile);
 
 class RdfReader {
     constructor() {
-        this._data = {};
+        this.afterReadClass = new SyncSeriesEventEmitter();
+        this.afterReadProperty = new SyncSeriesEventEmitter();
     }
 
     /**
@@ -25,7 +27,7 @@ class RdfReader {
      * @private
      * @return {import('@themost/common').DataFieldBase[]}
      */
-    readObjectProperties(document, id) {
+    readAnyObjectProperty(document, id) {
         return document.documentElement.selectNodes(`owl:ObjectProperty/rdfs:domain[@rdf:resource='${id}']/..`).map((item) => {
             const label = item.selectSingleNode(`rdfs:label[@xml:lang='en']`);
             const identifier = item.selectSingleNode('dc:identifier');
@@ -50,12 +52,66 @@ class RdfReader {
     }
 
     /**
-     * Reads RDF rdf:Property and returns an array of data fields.
+     * Returns the identifier by parsing the give URI.
      * @private
+     * @param {string} about 
+     * @returns {string}
+     */
+    fromAbout(about) {
+        const aboutUri = new URL(about);
+        if (aboutUri.hash.length > 0) {
+            return aboutUri.hash.substring(1);
+        }
+        return new URL(about).pathname.split('/').pop().trim();
+    }
+
+    /**
+     * Selects RDF class properties
+     * @protected
+     * @param {import('@themost/xml').XNode} element 
+     * @returns {XNode[]}
+     */
+    selectAnyProperty(element) {
+        const domain = element.getAttribute('rdf:about');
+        return element.ownerDocument.selectNodes(`rdf:RDF/rdf:Property/rdfs:domain[@rdf:resource='${domain}']/..`);
+    }
+
+    /**
+     * Selects RDF range property
+     * @protected
+     * @returns {import('@themost/xml').XNode}
+     */
+    selectRange(element) {
+        return element.selectSingleNode('rdfs:range');
+    }
+
+    /**
+     * Selects RDF comment property
+     * @protected
+     * @param {import('@themost/xml').XNode} element
+     * @returns {import('@themost/xml').XNode}
+     */
+    selectComment(element) {
+       let commentNode = element.selectSingleNode(`rdfs:comment[@xml:lang='en']`);
+       if (commentNode != null) {
+           return commentNode;
+       }
+       return element.selectSingleNode(`@rdfs:comment`);
+    }
+
+    selectSubClassOf(element) {
+        return element.selectSingleNode('rdfs:subClassOf/owl:Class/@rdf:about');
+    }
+
+    /**
+     * Reads RDF rdf:Property and returns an array of data fields.
+     * @protected
+     * @param {import('@themost/xml').XNode} element
      * @return {import('@themost/common').DataFieldBase[]}
      */
-    readProperties(document, domain) {
-        return document.selectNodes(`rdf:RDF/rdf:Property/rdfs:domain[@rdf:resource='${domain}']/..`).map((item) => {
+    readAnyProperty(element) {
+        const nodes = this.selectAnyProperty(element);
+        return nodes.map((item) => {
             const propertyType = item.selectSingleNode('rdf:type[@rdf:resource]');
             const about = item.getAttribute('rdf:about');
             // get identifier
@@ -65,36 +121,56 @@ class RdfReader {
                 name = identifierNode && identifierNode.nodeTypedValue.split(':').pop().trim();
             } else {
                 // get identifier from about
-                name = new URL(about).pathname.split('/').pop().trim();
+                name = this.fromAbout(about);
             }
             // get label
-            let title = item.getAttribute('rdf:label');
+            let title = item.getAttribute('rdfs:label');
             const labelNode = item.selectSingleNode(`rdfs:label[@xml:lang='en']`);
             if (labelNode != null) {
                 title = labelNode.nodeTypedValue;
             }
-            // get comment
-            let description = item.getAttribute('rdf:comment');
-            const commentNode = item.selectSingleNode(`rdfs:comment[@xml:lang='en']`);
+            // get description
+            let description = null;
+            const commentNode = this.selectComment(item);
             if (commentNode != null) {
-                title = commentNode.nodeTypedValue;
+                description = commentNode.nodeTypedValue;
             }
-            let range = item.selectSingleNode('rdfs:range');
+            // get property range (the type of the property)
+            let range = this.selectRange(item);
             let type = 'Object';
             if (range) {
-                const rangeClass = document.selectSingleNode(`rdf:RDF/rdf:Class[@rdf:about='${range.getAttribute('rdf:resource')}']`);
+                const resource = range.getAttribute('rdf:resource');
+                const rangeClass = element.ownerDocument.selectSingleNode(`rdf:RDF/rdf:Class[@rdf:about='${resource}']`);
                 if (rangeClass) {
                     const identifier = rangeClass.selectSingleNode('dc:identifier');
-                    type = identifier.nodeTypedValue;
+                    if (identifier) {
+                        type = identifier.nodeTypedValue;
+                    } else {
+                        type = rangeClass.getAttribute('rdf:about').split('/').pop().trim();
+                    }
+                } else {
+                    // try to identify type from resource
+                    const uri = new URL(resource);
+                    if (uri.hash.length === 0) {
+                        type = uri.pathname.split('/').pop().trim();
+                    } else {
+                        type = uri.hash.substring(1);
+                    }
                 }
             }
-            return {
+            const result = {
                 "@id": about,
                 "name": name,
-                "title": title,
+                "title": name,
                 "description": description,
                 "type": type
             };
+            return Object.keys(result).reduce((acc, key) => {
+                if (Object.prototype.hasOwnProperty.call(result, key) && result[key] != null) {
+                    acc[key] = result[key];
+                }
+                return acc;
+            }, {});
         });
     }
 
@@ -105,7 +181,7 @@ class RdfReader {
      * @param {string} id
      * @return {import('@themost/common').DataFieldBase[]}
      */
-    readDataTypeProperties(document, id) {
+    readAnyDataTypeProperty(document, id) {
         return document.documentElement.selectNodes(`owl:DatatypeProperty/rdfs:domain[@rdf:resource='${id}']/..`).map((item) => {
             const label = item.selectSingleNode('rdfs:label');
             const identifier = item.selectSingleNode('dc:identifier');
@@ -156,40 +232,54 @@ class RdfReader {
      * @returns {import('@themost/common').DataModelProperties}
      */
     readRdfClass(element) {
-        let label = element.getAttribute('rdfs:label');
+        let title = element.getAttribute('rdfs:label');
         const about = element.getAttribute('rdf:about');
-        if (label == null) {
-            // get name from about
-            const segments = new URL(about).pathname.split('/');
-            label = segments[segments.length - 1];
+        if (title == null) {
+            title = this.fromAbout(about);
         }
+        const name = this.fromAbout(about);
         const model = {
             "$schema": "https://themost-framework.github.io/themost/models/2018/2/schema.json",
             "@id": about,
-            "name": label,
-            "title": label,
+            "name": name,
+            "title": title,
             "hidden": false,
             "sealed": false,
             "abstract": false,
+            "inherits": null,
+            "implements": null,
             "version": "1.0.0",
             "fields": [],
             "eventListeners": [],
-            "constraints": []
+            "constraints": [],
+            "privileges": []
         };
+        const subClass = this.selectSubClassOf(element);
+        if (subClass) {
+            model.inherits = this.fromAbout(subClass.nodeTypedValue);
+        }
         // get object properties
-        const fields = this.readObjectProperties(element.ownerDocument, about);
-        // get data type properties
-        const otherFields = this.readDataTypeProperties(element.ownerDocument, about);
-        fields.push(...otherFields);
+        const fields = [];
         // get properties
-        const add = this.readProperties(element.ownerDocument, about);
+        const add = this.readAnyProperty(element);
         fields.push(...add);
         model.fields = fields.sort((a, b) => {
             if (a.name < b.name) return -1;
             if (a.name > b.name) return 1;
             return 0;
         });
-        return model;
+        const result = Object.keys(model).reduce((acc, key) => {
+            if (Object.prototype.hasOwnProperty.call(model, key) && model[key] != null) {
+                acc[key] = model[key];
+            }
+            return acc;
+        }, {});
+        const event = {
+            target: this,
+            object: result
+        }
+        this.afterReadClass.emit(event);
+        return event.object;
     }
 
     /**
@@ -202,13 +292,100 @@ class RdfReader {
          * @type {XDocument}
          */
         const document = XDocument.loadXML(xml);
-        const items = document.selectNodes('rdf:RDF/rdfs:Class').map((item) => {
+        // get rdfs:Class
+        let nodes = document.selectNodes('rdf:RDF/rdfs:Class');
+        const items = nodes.map((item) => {
             return this.readRdfClass(item);
         });
+        // get owl:Class
+        nodes = document.selectNodes('rdf:RDF/owl:Class');
+        items.push(...nodes.map((item) => {
+            return this.readRdfClass(item);
+        }));
         return items;
     }
 }
 
+class SchemaOrgReader extends RdfReader {
+    constructor() {
+        super();
+        this.afterReadClass.subscribe(function addPrimaryKey(event) {
+            /**
+             * @type {import('@themost/common').DataModelProperties}
+             */
+            const model = event.object;
+            if (model.name === 'Thing') {
+                const primaryKey = model.fields.find((x) => x.primary === true);
+                if (primaryKey == null) {
+                    model.fields.unshift({
+                        '@id': 'https://themost.io/id',
+                        'name': 'id',
+                        'description': 'A unique identifier for this item',
+                        'title': 'id',
+                        'type': 'Counter',
+                        'primary': true,
+                        'editable': false
+                    })
+                }
+                let dateCreated = model.fields.find((x) => x.name === 'dateCreated');
+                if (dateCreated == null) {
+                    dateCreated = {
+                        '@id': 'https://themost.io/dateCreated',
+                        'name': 'dateCreated',
+                        'description': 'The date and time the item was created',
+                        'title': 'dateCreated',
+                        'type': 'DateTime',
+                        'readonly': true,
+                        'value': 'javascript:return new Date();'
+                    };
+                    model.fields.push(dateCreated);
+                }
+                let dateModified = model.fields.find((x) => x.name === 'dateModified');
+                if (dateModified == null) {
+                    dateModified = {
+                        '@id': 'https://themost.io/dateModified',
+                        'name': 'dateModified',
+                        'description': 'The date and time the item was last modified',
+                        'title': 'dateModified',
+                        'type': 'DateTime',
+                        'readonly': true,
+                        'value': 'javascript:return new Date();',
+                        'calculation': 'javascript:return new Date();'
+                    };
+                    model.fields.push(dateCreated);
+                }
+            }
+        });
+        this.afterReadClass.subscribe(function setAdditionalType(event) {
+            /**
+             * @type {import('@themost/common').DataModelProperties}
+             */
+            const model = event.object;
+            if (model.name === 'Thing') {
+                const additionalType = model.fields.find((x) => x.name === 'additionalType');
+                if (additionalType) {
+                    additionalType.type = 'Text';
+                    additionalType.readonly = true;
+                    additionalType.value = 'javascript:return this.model.name;'
+                }
+            }
+        });
+    }
+    selectRange(element) {
+        return element.selectSingleNode('schema:rangeIncludes');
+    }
+    selectAnyProperty(element) {
+        return element.ownerDocument.selectNodes(`rdf:RDF/rdf:Property/schema:domainIncludes[@rdf:resource='${element.getAttribute('rdf:about')}']/..`);
+    }
+    selectComment(element) {
+        return element.selectSingleNode(`rdfs:comment`);
+    }
+    selectSubClassOf(element) {
+        return element.selectSingleNode('rdfs:subClassOf/@rdf:resource');
+    }
+}
+
 export {
+    SchemaOrgReader,
     RdfReader
 }
